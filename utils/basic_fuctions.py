@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 
 def load_data(folder_name, file_name, header=None):
     """Load csv file in df"""
@@ -8,49 +9,19 @@ def load_data(folder_name, file_name, header=None):
 
     return df
 
-def plot_metrics_from_file(filename):
-    # Read the metrics 
-    metrics_df = pd.read_csv(filename)
-    
-    # Plot Precision, Recall, and F1-score for each class over cycles
-    cycles = metrics_df['Cycle'].unique()
+def preprocess_features(X_df):
+    X_df_copy = X_df.copy()
+    # Convert categorical columns to numerical using LabelEncoder
+    for col in X_df_copy.columns:
+        if X_df_copy.loc[:, col].dtype == 'object':  # Check if the column is categorical
+            le = LabelEncoder()
+            X_df_copy.loc[:, col] = le.fit_transform(X_df_copy[col])
 
-    # Create a figure with multiple subplots
-    fig, axes = plt.subplots(3, 1, figsize=(10, 15))
-    
-    for class_label in metrics_df['Class'].unique():
-        class_data = metrics_df[metrics_df['Class'] == class_label]
+    # Now normalize the dataframe
+    scaler = MinMaxScaler()
+    X_normalized = scaler.fit_transform(X_df_copy)
 
-        axes[0].plot(class_data['Cycle'], class_data['Precision'], label=f"Class {class_label}", marker='o')
-        axes[1].plot(class_data['Cycle'], class_data['Recall'], label=f"Class {class_label}", marker='o')
-        axes[2].plot(class_data['Cycle'], class_data['F1-score'], label=f"Class {class_label}", marker='o')
+    X_normalized = pd.DataFrame(X_normalized, columns=X_df_copy.columns)
 
-    # Labels and titles
-    axes[0].set_title('Precision per Cycle')
-    axes[0].set_xlabel('Cycle')
-    axes[0].set_ylabel('Precision')
-    axes[0].legend()
-
-    axes[1].set_title('Recall per Cycle')
-    axes[1].set_xlabel('Cycle')
-    axes[1].set_ylabel('Recall')
-    axes[1].legend()
-
-    axes[2].set_title('F1-Score per Cycle')
-    axes[2].set_xlabel('Cycle')
-    axes[2].set_ylabel('F1-Score')
-    axes[2].legend()
-
-    plt.tight_layout()
-    plt.show()
-
-    # Plot Overall Accuracy per Cycle
-    plt.figure(figsize=(8, 5))
-    accuracy_data = metrics_df.groupby('Cycle')['Accuracy'].mean()
-    plt.plot(accuracy_data.index, accuracy_data, marker='o', label='Accuracy', color='blue')
-    plt.title('Overall Accuracy per Cycle')
-    plt.xlabel('Cycle')
-    plt.ylabel('Accuracy')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    # Check the resulting DataFrame
+    return X_normalized

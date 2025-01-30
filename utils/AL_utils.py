@@ -2,19 +2,14 @@ import pandas as pd
 import numpy as np
 import os
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix, accuracy_score
+from sklearn.model_selection import train_test_split
 
 
 def select_lowest_probabieties(probabilities, df, n_samples, labels):
     """
-    Parametres:
-     - probabilities: samples probabilities
-     - df: DataFrame 
-     - n_samples: number of samples
-    Return:
-     - df_top: DataFrame with samples with the lowest probabilities
-     - df_rest: DataFrame contianing rest of samples
+    Split df for df with the n_samples lowest probailities and the rest
     """
-    df_with_proba = df.copy()
+    df_with_proba = df
     df_with_proba['probability'] = None
     df_with_proba['labels'] = None
 
@@ -30,40 +25,45 @@ def select_lowest_probabieties(probabilities, df, n_samples, labels):
 
     return X_top, y_top, X_rest, y_rest
 
-def save_metrics_to_file(folder_name, filename, cycle, precision, recall, f1, cm, accuracy, X_labelled, y_test):
-    # Ensure the folder exists, create it if necessary
+def save_metrics_to_file(folder_name, filename, cycle, precision, recall, f1, cm, accuracy, X_labelled, y_test, positive_class):
+    """
+    Save metrics only for the positive class (to a CSV file.
+    """
     if not os.path.exists(folder_name):
         os.makedirs(folder_name)
     
-    # Construct the full path to the file in the specified folder
     full_path = os.path.join(folder_name, filename)
     
-    # Create a list to hold the results for this cycle
     results = []
+    unique_classes = np.unique(y_test)
     
-    # Append results for each class in the metrics
-    for i, class_label in enumerate(np.unique(y_test)):
+    if positive_class in unique_classes:
+        positive_class_index = np.where(unique_classes == positive_class)[0][0]
+        
+        # Append results only for the positive class
         results.append({
             'Cycle': cycle,
-            'Class': class_label,
-            'Precision': precision[i],
-            'Recall': recall[i],
-            'F1-score': f1[i],
+            'Class': positive_class,
+            'Precision': precision[positive_class_index],
+            'Recall': recall[positive_class_index],
+            'F1-score': f1[positive_class_index],
             'Accuracy': accuracy,
             'Confusion Matrix': cm.tolist(),
             'Labelled Samples': X_labelled.shape[0]
         })
     
-    # Convert to DataFrame and save to CSV
-    results_df = pd.DataFrame(results)
-    
-    # Append to the CSV file (if it exists) or create a new one
-    results_df.to_csv(full_path, mode='a', header=not pd.io.common.file_exists(full_path), index=False)
-    print(f"Metrics saved for cycle {cycle} to {full_path}")
+    if results:  
+        results_df = pd.DataFrame(results)
+        results_df.to_csv(full_path, mode='a', header=not pd.io.common.file_exists(full_path), index=False)
+        print(f"Metrics saved for cycle {cycle} to {full_path}")
+    else:
+        print(f"No metrics to save for the positive class '{positive_class}' in cycle {cycle}.")
 
     
-# Function to calculate metrics
 def calculate_metrics(y_test, y_pred):
+    """
+    Caluate metrices
+    """
     precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average=None)
     cm = confusion_matrix(y_test, y_pred)
     accuracy = accuracy_score(y_test, y_pred)
@@ -72,60 +72,57 @@ def calculate_metrics(y_test, y_pred):
 
 def select_samples(probalility, df, n_samples, labels, metric="least_confidence"):
     """
-    Select samples for active learning based on different uncertainty metrics.
-    
-    Parameters:
-    - probalility: Array of probabilities for each sample (shape: [n_samples, n_classes]).
-    - df: The DataFrame containing the feature data.
-    - n_samples: The number of samples to select.
-    - labels: The true labels for the unlabelled samples.
-    - metric: The uncertainty metric to use. Options are 'least_confidence', 'entropy', or 'margin_sampling'.
-    
-    Returns:
-    - X_top: The feature data for the selected samples.
-    - y_top: The labels for the selected samples.
-    - X_rest: The feature data for the remaining samples.
-    - y_rest: The labels for the remaining samples.
+    Select the top n_samples samples with the highest uncertainty
     """
+
+    if len(np.unique(labels)) == 1 or metric == "random_sampling":
+        print("Only one class present. Selecting samples randomly.")
+        df_sampled = df_with_proba.sample(n=n_samples)
+        df_rest = df_with_proba.drop(df_sampled.index)
+
+        X_top = df_sampled.drop(columns=['labels'])
+        y_top = df_sampled['labels']
+
+        X_rest = df_rest.drop(columns=['labels'])
+        y_rest = df_rest['labels']
+
+        return X_top, y_top, X_rest, y_rest
     
-    # Create a DataFrame to store the probabilities and labels
     df_with_proba = df.copy()
     df_with_proba['labels'] = labels
 
     # Compute the uncertainty scores based on the chosen metric
     if metric == "least_confidence":
         # Least Confidence: Select the samples with the lowest top predicted probabilities
-        prob_top = np.max(probalility, axis=1)  # Get the top probability for each sample
+        prob_top = np.max(probalility, axis=1)  
         df_with_proba['uncertainty'] = prob_top
 
     elif metric == "entropy":
         # Entropy: Calculate the entropy for each sample based on its class probabilities
-        entropy_values = -np.sum(probalility * np.log(probalility + 1e-10), axis=1)  # Adding small epsilon to avoid log(0)
+        entropy_values = -np.sum(probalility * np.log(probalility + 1e-10), axis=1) 
         df_with_proba['uncertainty'] = entropy_values
 
     elif metric == "margin_sampling":
         # Margin Sampling: Select the samples where the top two predicted probabilities are closest
-        top_2_probs = np.partition(probalility, -2, axis=1)[:, -2:]  # Get the top 2 predicted probabilities
-        margin = top_2_probs[:, 1] - top_2_probs[:, 0]  # Calculate the difference between the top two
+        top_2_probs = np.partition(probalility, -2, axis=1)[:, -2:]  # Get the top 2 predicted probabilities, Calculate the difference between the top two
+        margin = top_2_probs[:, 1] - top_2_probs[:, 0]  
         df_with_proba['uncertainty'] = margin
         
     else:
-        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling'.")
+        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
     
-    # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
-    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)
-    
-    # Select the top `n_samples` samples with the highest uncertainty
+    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)    
     df_top = df_with_proba[:n_samples]
     X_top = df_top.drop(columns=['uncertainty', 'labels'])
     y_top = df_top['labels']
     
-    # Select the remaining samples
     df_rest = df_with_proba[n_samples:]
     X_rest = df_rest.drop(columns=['uncertainty', 'labels'])
     y_rest = df_rest['labels']
     
     return X_top, y_top, X_rest, y_rest
+
+
 
 def calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled):
     """
@@ -133,42 +130,159 @@ def calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled)
     """
     y_pred = model.predict(X_labelled)
     
-    # Find misclassifications (or measure uncertainty)
+    # Find misclassifications
     misclassifications = (y_pred != y_labeled)
     
     # Calculate the frequency of misclassifications per class
     class_misclassifications = {class_label: np.sum(misclassifications[y_labeled == class_label]) 
                                 for class_label in np.unique(y_labeled)}
+    print(class_misclassifications)
     
     # Compute class weights as the inverse of misclassifications (more misclassified = higher weight)
-    total_misclassifications = sum(class_misclassifications.values())
+    total_misclassifications = sum(class_misclassifications)
     class_weights = {class_label: (total_misclassifications / (class_misclassifications[class_label] + 1)) 
                      for class_label in class_misclassifications}
+    print(class_weights)
     
     return class_weights
 
 def select_samples_weighted(probalility, df, n_samples, labels, metric, class_weights):
     """
     Select samples for active learning based on different uncertainty metrics and dynamically calculated class weights.
-
-    Parameters:
-    - probalility: Array of probabilities for each sample (shape: [n_samples, n_classes]).
-    - df: The DataFrame containing the feature data.
-    - n_samples: The number of samples to select.
-    - labels: The true labels for the unlabelled samples.
-    - metric: The uncertainty metric to use. Options are 'least_confidence', 'entropy', or 'margin_sampling'.
-    - calculate_class_weights_fn: A function to dynamically calculate class weights.
-
-    Returns:
-    - X_top: The feature data for the selected samples.
-    - y_top: The labels for the selected samples.
-    - X_rest: The feature data for the remaining samples.
-    - y_rest: The labels for the remaining samples.
     """
     
-    # Create a DataFrame to store the probabilities and labels
     df_with_proba = df.copy()
     df_with_proba['labels'] = labels
+
+    if len(np.unique(labels)) == 1 or metric == "random_sampling":
+        print("Only one class present. Selecting samples randomly.")
+        df_sampled = df_with_proba.sample(n=n_samples)
+        df_rest = df_with_proba.drop(df_sampled.index)
+
+        X_top = df_sampled.drop(columns=['labels'])
+        y_top = df_sampled['labels']
+
+        X_rest = df_rest.drop(columns=['labels'])
+        y_rest = df_rest['labels']
+
+        return X_top, y_top, X_rest, y_rest
+
+    
+    # Compute the uncertainty scores based on the chosen metric
+    if metric == "least_confidence":
+        # Least Confidence: Select the samples with the lowest top predicted probabilities
+        prob_top = np.max(probalility, axis=1)  # Get the top probability for each sample
+        df_with_proba['uncertainty'] = prob_top
+
+    elif metric == "entropy":
+        entropy_values = -np.sum(probalility * np.log(probalility + 1e-10), axis=1)  # Adding small epsilon to avoid log(0)
+        df_with_proba['uncertainty'] = entropy_values
+
+    elif metric == "margin_sampling":
+        top_2_probs = np.partition(probalility, -2, axis=1)[:, -2:]  # Get the top 2 predicted probabilities
+        margin = top_2_probs[:, 1] - top_2_probs[:, 0]  # Calculate the difference between the top two
+        df_with_proba['uncertainty'] = margin
+    else:
+        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
+
+    # Apply class weighting to the uncertainty values
+    if class_weights:
+        df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
+    
+    # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
+    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)
+    
+    # Select the top n_samples samples with the highest uncertainty
+    df_top = df_with_proba[:n_samples]
+    X_top = df_top.drop(columns=['uncertainty', 'labels'])
+    y_top = df_top['labels']
+    
+    df_rest = df_with_proba[n_samples:]
+    X_rest = df_rest.drop(columns=['uncertainty', 'labels'])
+    y_rest = df_rest['labels']
+    
+    return X_top, y_top, X_rest, y_rest
+
+def basic_active_lerning_flow(X_train, y_train, budget, cycle_budget, model, model_name, dataset_name, X_test, y_test, samples_selection_metric='margin_sampling', test_size=0.9):
+  """
+  
+  """
+  # Split data to DL and DU
+  X_labelled, X_unlabelled, y_labeled, y_unlabelled = train_test_split(X_train, y_train, test_size=test_size, stratify=y_train)
+
+  # Whole budget
+  B = budget
+  # Budget per cycle
+  b = cycle_budget
+  # Number of cycle
+  c = 0
+
+  results_folder = 'DETAILED_RESULTS'
+
+  while B>0:
+      print(dataset_name)
+      if np.isnan(y_labeled).sum() > 0:
+        print(f"y_labeled contains NaN values: {np.isnan(y_labeled).sum()} NaNs")
+        raise ValueError("y_labeled contains NaN values. Please clean the data.")
+
+      model.fit(X_labelled, y_labeled)
+      print(X_unlabelled)
+      probalilities = model.predict_proba(X_unlabelled)
+      # 2. Select samples based on choosen metrics and ask Oracle
+      #class_weights = calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled)
+      X_lowest_prob, y_lowest_proba, X_rest, y_rest = select_samples(probalility=probalilities, df=X_unlabelled, n_samples=b, labels=y_unlabelled, metric='margin_sampling')
+
+      # 3. Add samples labelled by Oracle to DL
+      X_labelled = pd.concat([X_labelled, X_lowest_prob])
+      y_labeled = pd.concat([y_labeled, y_lowest_proba])
+      # 4. Update DUL
+      X_unlabelled = X_rest
+      y_unlabelled = y_rest
+
+      # Calculate accuracy for this cycle
+      y_pred = model.predict(X_test)
+
+      metrics_filename = f'{model_name}__{samples_selection_metric}__{dataset_name}__classic_AL.csv'
+
+      # Calculate metrics
+      precision, recall, f1, cm, accuracy = calculate_metrics(y_test, y_pred)
+      
+      # Save the metrics to the file
+      save_metrics_to_file(results_folder, metrics_filename, c, precision, recall, f1, cm, accuracy, X_labelled, y_test, positive_class=1)
+          
+      accuracy = accuracy_score(y_test, y_pred)
+      print(f"\nOverall Accuracy: {accuracy:.4f}")
+      
+      # Update cycle and budget
+      c +=1
+      B -=b
+
+  return metrics_filename
+
+def select_samples(probalility, df, n_samples, labels, metric):
+    """
+    Select samples for active learning based on different uncertainty metrics and dynamically calculated class weights.
+    """
+    # Create a DataFrame to store the probabilities and labels
+    df_with_proba = df.copy()
+    df_with_proba['labels'] = labels.values
+
+
+    # Check if only one class is present
+    if len(np.unique(labels)) == 1:
+        print("Only one class present. Selecting samples randomly.")
+        # Randomly sample `n_samples` from the data
+        df_sampled = df_with_proba.sample(n=n_samples, random_state=42)
+        df_rest = df_with_proba.drop(df_sampled.index)
+
+        X_top = df_sampled.drop(columns=['labels'])
+        y_top = df_sampled['labels']
+
+        X_rest = df_rest.drop(columns=['labels'])
+        y_rest = df_rest['labels']
+
+        return X_top, y_top, X_rest, y_rest
+
     
     # Compute the uncertainty scores based on the chosen metric
     if metric == "least_confidence":
@@ -188,8 +302,8 @@ def select_samples_weighted(probalility, df, n_samples, labels, metric, class_we
         raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling'.")
 
     # Apply class weighting to the uncertainty values if class weights are provided
-    if class_weights:
-        df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
+    # if class_weights:
+    #     df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
     
     # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
     df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)
@@ -205,3 +319,61 @@ def select_samples_weighted(probalility, df, n_samples, labels, metric, class_we
     y_rest = df_rest['labels']
     
     return X_top, y_top, X_rest, y_rest
+
+def weighted_active_learning(X_train, y_train, budget, cycle_budget, model, model_name, dataset_name, X_test, y_test, samples_selection_metric='margin_sampling', test_size=0.9):
+  """
+  
+  """
+  # Split data to DL and DU
+  X_labelled, X_unlabelled, y_labeled, y_unlabelled = train_test_split(X_train, y_train, test_size=test_size, stratify=y_train)
+
+  # Whole budget
+  B = budget
+  # Budget per cycle
+  b = cycle_budget
+  # Number of cycle
+  c = 0
+
+  results_folder = 'DETAILED_RESULTS'
+
+  while B>0:
+      print(dataset_name)
+      if np.isnan(y_labeled).sum() > 0:
+        print(f"y_labeled contains NaN values: {np.isnan(y_labeled).sum()} NaNs")
+        raise ValueError("y_labeled contains NaN values. Please clean the data.")
+
+      model.fit(X_labelled, y_labeled)
+      probalilities = model.predict_proba(X_unlabelled)
+      # 2. Select samples based on choosen metrics and ask Oracle
+      class_weights = calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled)
+      X_lowest_prob, y_lowest_proba, X_rest, y_rest = select_samples_weighted(probalility=probalilities, df=X_unlabelled, n_samples=b, labels=y_unlabelled, metric='margin_sampling', class_weights=class_weights)
+
+      # 3. Add samples labelled by Oracle to DL
+      X_labelled = pd.concat([X_labelled, X_lowest_prob])
+      y_labeled = pd.concat([y_labeled, y_lowest_proba])
+      # 4. Update DUL
+      X_unlabelled = X_rest
+      y_unlabelled = y_rest
+
+      print(X_labelled.shape)
+      print(X_unlabelled.shape)
+      # Calculate accuracy for this cycle
+      y_pred = model.predict(X_test)
+
+      metrics_filename = f'{model_name}__{samples_selection_metric}__{dataset_name}__custom_classic_AL.csv'
+
+      # Calculate metrics
+      precision, recall, f1, cm, accuracy = calculate_metrics(y_test, y_pred)
+      
+      # Save the metrics to the file
+      save_metrics_to_file(results_folder, metrics_filename, c, precision, recall, f1, cm, accuracy, X_labelled, y_test, positive_class=1)
+          
+      # Print accurracy
+      accuracy = accuracy_score(y_test, y_pred)
+      print(f"\nOverall Accuracy: {accuracy:.4f}")
+      
+      # Update cycle and budget
+      c +=1
+      B -=b
+
+  return metrics_filename
