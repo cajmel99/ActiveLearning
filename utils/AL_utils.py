@@ -3,7 +3,7 @@ import numpy as np
 import os
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix, accuracy_score
 from sklearn.model_selection import train_test_split
-
+from sklearn.metrics import confusion_matrix
 
 def select_lowest_probabieties(probabilities, df, n_samples, labels):
     """
@@ -15,7 +15,7 @@ def select_lowest_probabieties(probabilities, df, n_samples, labels):
 
     df_with_proba['probability'] = probabilities
     df_with_proba['labels'] = labels
-    df_with_proba = df_with_proba.sort_values(by='probability', ascending=True)
+    df_with_proba = df_with_proba.sort_values(by='probability', ascending=False)
     df_top = df_with_proba[:n_samples]
     X_top = df_top.drop(columns=['probability', 'labels'])
     y_top = df_top['labels']
@@ -111,7 +111,7 @@ def select_samples(probalility, df, n_samples, labels, metric="least_confidence"
     else:
         raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
     
-    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)    
+    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=False)    
     df_top = df_with_proba[:n_samples]
     X_top = df_top.drop(columns=['uncertainty', 'labels'])
     y_top = df_top['labels']
@@ -122,86 +122,6 @@ def select_samples(probalility, df, n_samples, labels, metric="least_confidence"
     
     return X_top, y_top, X_rest, y_rest
 
-
-
-def calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled):
-    """
-    Calculate dynamic class weights based on the performance of the model on the current labelled data.
-    """
-    y_pred = model.predict(X_labelled)
-    
-    # Find misclassifications
-    misclassifications = (y_pred != y_labeled)
-    
-    # Calculate the frequency of misclassifications per class
-    class_misclassifications = {class_label: np.sum(misclassifications[y_labeled == class_label]) 
-                                for class_label in np.unique(y_labeled)}
-    print(class_misclassifications)
-    
-    # Compute class weights as the inverse of misclassifications (more misclassified = higher weight)
-    total_misclassifications = sum(class_misclassifications)
-    class_weights = {class_label: (total_misclassifications / (class_misclassifications[class_label] + 1)) 
-                     for class_label in class_misclassifications}
-    print(class_weights)
-    
-    return class_weights
-
-def select_samples_weighted(probalility, df, n_samples, labels, metric, class_weights):
-    """
-    Select samples for active learning based on different uncertainty metrics and dynamically calculated class weights.
-    """
-    
-    df_with_proba = df.copy()
-    df_with_proba['labels'] = labels
-
-    if len(np.unique(labels)) == 1 or metric == "random_sampling":
-        print("Only one class present. Selecting samples randomly.")
-        df_sampled = df_with_proba.sample(n=n_samples)
-        df_rest = df_with_proba.drop(df_sampled.index)
-
-        X_top = df_sampled.drop(columns=['labels'])
-        y_top = df_sampled['labels']
-
-        X_rest = df_rest.drop(columns=['labels'])
-        y_rest = df_rest['labels']
-
-        return X_top, y_top, X_rest, y_rest
-
-    
-    # Compute the uncertainty scores based on the chosen metric
-    if metric == "least_confidence":
-        # Least Confidence: Select the samples with the lowest top predicted probabilities
-        prob_top = np.max(probalility, axis=1)  # Get the top probability for each sample
-        df_with_proba['uncertainty'] = prob_top
-
-    elif metric == "entropy":
-        entropy_values = -np.sum(probalility * np.log(probalility + 1e-10), axis=1)  # Adding small epsilon to avoid log(0)
-        df_with_proba['uncertainty'] = entropy_values
-
-    elif metric == "margin_sampling":
-        top_2_probs = np.partition(probalility, -2, axis=1)[:, -2:]  # Get the top 2 predicted probabilities
-        margin = top_2_probs[:, 1] - top_2_probs[:, 0]  # Calculate the difference between the top two
-        df_with_proba['uncertainty'] = margin
-    else:
-        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
-
-    # Apply class weighting to the uncertainty values
-    if class_weights:
-        df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
-    
-    # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
-    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)
-    
-    # Select the top n_samples samples with the highest uncertainty
-    df_top = df_with_proba[:n_samples]
-    X_top = df_top.drop(columns=['uncertainty', 'labels'])
-    y_top = df_top['labels']
-    
-    df_rest = df_with_proba[n_samples:]
-    X_rest = df_rest.drop(columns=['uncertainty', 'labels'])
-    y_rest = df_rest['labels']
-    
-    return X_top, y_top, X_rest, y_rest
 
 def basic_active_lerning_flow(X_train, y_train, budget, cycle_budget, model, model_name, dataset_name, X_test, y_test, samples_selection_metric='margin_sampling', test_size=0.9):
   """
@@ -226,7 +146,6 @@ def basic_active_lerning_flow(X_train, y_train, budget, cycle_budget, model, mod
         raise ValueError("y_labeled contains NaN values. Please clean the data.")
 
       model.fit(X_labelled, y_labeled)
-      print(X_unlabelled)
       probalilities = model.predict_proba(X_unlabelled)
       # 2. Select samples based on choosen metrics and ask Oracle
       #class_weights = calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled)
@@ -269,9 +188,7 @@ def select_samples(probalility, df, n_samples, labels, metric):
 
 
     # Check if only one class is present
-    if len(np.unique(labels)) == 1:
-        print("Only one class present. Selecting samples randomly.")
-        # Randomly sample `n_samples` from the data
+    if len(np.unique(labels)) == 1 or metric == "random_sampling":
         df_sampled = df_with_proba.sample(n=n_samples, random_state=42)
         df_rest = df_with_proba.drop(df_sampled.index)
 
@@ -299,14 +216,14 @@ def select_samples(probalility, df, n_samples, labels, metric):
         margin = top_2_probs[:, 1] - top_2_probs[:, 0]  # Calculate the difference between the top two
         df_with_proba['uncertainty'] = margin
     else:
-        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling'.")
+        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
 
     # Apply class weighting to the uncertainty values if class weights are provided
     # if class_weights:
     #     df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
     
     # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
-    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=True)
+    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=False)
     
     # Select the top n_samples samples with the highest uncertainty
     df_top = df_with_proba[:n_samples]
@@ -319,6 +236,93 @@ def select_samples(probalility, df, n_samples, labels, metric):
     y_rest = df_rest['labels']
     
     return X_top, y_top, X_rest, y_rest
+
+
+def calculate_dynamic_class_weights_based_on_model(model, X_labelled, y_labeled):
+    """
+    Calculate dynamic class weights as the fraction of misclassified samples in a specific class by the total number of samples in that class.
+    """
+    y_pred = model.predict(X_labelled)
+    
+    # Compute confusion matrix
+    cm = confusion_matrix(y_labeled, y_pred, labels=np.unique(y_labeled))
+    
+    # Misclassified samples per class (row sum - diagonal elements)
+    misclassified_counts = cm.sum(axis=1) - np.diag(cm)
+    
+    # Total number of samples per class (row sum)
+    total_samples_per_class = cm.sum(axis=1)
+    
+    # Compute class weights: (misclassified samples in class) / (total samples in class)
+    class_weights = {
+        label: (misclassified_counts[i] / total_samples_per_class[i]) if total_samples_per_class[i] > 0 else 0
+        for i, label in enumerate(np.unique(y_labeled))
+    }
+    max_weight = max(class_weights.values()) if class_weights else 1
+    class_weights = {k: v / max_weight for k, v in class_weights.items()}
+
+    
+    return class_weights
+
+def select_samples_weighted(probalility, df, n_samples, labels, metric, class_weights):
+    """
+    Select samples for active learning based on different uncertainty metrics and dynamically calculated class weights.
+    """
+    
+    df_with_proba = df.copy()
+    df_with_proba['labels'] = labels
+
+    if len(np.unique(labels)) == 1 or metric == "random_sampling":
+        df_sampled = df_with_proba.sample(n=n_samples)
+        df_rest = df_with_proba.drop(df_sampled.index)
+
+        X_top = df_sampled.drop(columns=['labels'])
+        y_top = df_sampled['labels']
+
+        X_rest = df_rest.drop(columns=['labels'])
+        y_rest = df_rest['labels']
+
+        return X_top, y_top, X_rest, y_rest
+
+    
+    # Compute the uncertainty scores based on the chosen metric
+    if metric == "least_confidence":
+        # Least Confidence: Select the samples with the lowest top predicted probabilities
+        prob_top = np.max(probalility, axis=1)  # Get the top probability for each sample
+        df_with_proba['uncertainty'] = prob_top
+
+    elif metric == "entropy":
+        entropy_values = -np.sum(probalility * np.log(probalility + 1e-10), axis=1)  # Adding small epsilon to avoid log(0)
+        df_with_proba['uncertainty'] = entropy_values
+
+    elif metric == "margin_sampling":
+        top_2_probs = np.partition(probalility, -2, axis=1)[:, -2:]  # Get the top 2 predicted probabilities
+        margin = top_2_probs[:, 1] - top_2_probs[:, 0]  # Calculate the difference between the top two
+        df_with_proba['uncertainty'] = margin
+    else:
+        raise ValueError(f"Unknown metric: {metric}. Available options are 'least_confidence', 'entropy', 'margin_sampling' or 'random_sampling.")
+
+    # Apply class weighting to the uncertainty values
+    if class_weights:
+        # df_with_proba['uncertainty'] *= df_with_proba['labels'].map(class_weights)
+        df_with_proba['uncertainty'] = (df_with_proba['uncertainty'].rank() * 0.5) + (df_with_proba['labels'].map(class_weights).rank() * 0.5)
+
+    
+    # Sort the samples by the uncertainty (ascending order to get the most uncertain samples)
+    df_with_proba = df_with_proba.sort_values(by='uncertainty', ascending=False)
+    
+    # Select the top n_samples samples with the highest uncertainty
+    df_top = df_with_proba[:n_samples]
+    X_top = df_top.drop(columns=['uncertainty', 'labels'])
+    y_top = df_top['labels']
+    
+    df_rest = df_with_proba[n_samples:]
+    X_rest = df_rest.drop(columns=['uncertainty', 'labels'])
+    y_rest = df_rest['labels']
+    
+    return X_top, y_top, X_rest, y_rest
+
+
 
 def weighted_active_learning(X_train, y_train, budget, cycle_budget, model, model_name, dataset_name, X_test, y_test, samples_selection_metric='margin_sampling', test_size=0.9):
   """
@@ -355,8 +359,6 @@ def weighted_active_learning(X_train, y_train, budget, cycle_budget, model, mode
       X_unlabelled = X_rest
       y_unlabelled = y_rest
 
-      print(X_labelled.shape)
-      print(X_unlabelled.shape)
       # Calculate accuracy for this cycle
       y_pred = model.predict(X_test)
 
